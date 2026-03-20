@@ -1,0 +1,88 @@
+/*
+  IoT Thermostaat - ESP32-C6 (ZONDER Blynk)
+  Hardware:
+    - DHT11  → GPIO4 (met 10kΩ pull-up naar 3.3V)
+    - Potentiometer (10kΩ) → GPIO34 (ADC, wiper)
+    - LED (rood) → GPIO5 via 220Ω weerstand naar GND
+*/
+
+#include <DHT.h>
+
+// ─────────────────────────────────────────────
+// Pin definities
+// ─────────────────────────────────────────────
+#define DHTPIN   4      // DHT11 data pin
+#define DHTTYPE  DHT11
+#define POT_PIN  6      // Potentiometer (ADC ingang)
+#define LED_PIN  5      // LED = verwarmingsketel
+
+// ─────────────────────────────────────────────
+// Objecten & variabelen
+// ─────────────────────────────────────────────
+DHT dht(DHTPIN, DHTTYPE);
+
+float gemetenTemp  = 0.0;
+float gewensteTemp = 0.0;
+bool  ketelAan     = false;
+
+// ─────────────────────────────────────────────
+// Setup
+// ─────────────────────────────────────────────
+void setup() {
+  Serial.begin(115200);
+
+  // ESP32-C6 gebruikt USB-CDC: wacht tot Serial klaar is
+  unsigned long start = millis();
+  while (!Serial && (millis() - start) < 3000) {
+    delay(10);
+  }
+
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  dht.begin();
+
+  Serial.println("=== Thermostaat gestart ===");
+  delay(2000); // DHT11 heeft even tijd nodig na opstart
+}
+
+// ─────────────────────────────────────────────
+// Loop
+// ─────────────────────────────────────────────
+void loop() {
+
+  // 1. Temperatuur meten
+  float meting = dht.readTemperature();
+  if (isnan(meting)) {
+    Serial.println("[FOUT] DHT11 lezing mislukt! Controleer bedrading.");
+    delay(2000);
+    return;
+  }
+  gemetenTemp = meting;
+
+  // 2. Gewenste temperatuur via potentiometer
+  //    ADC bereik: 0–4095  →  schaal naar 0–30 graden
+  int adcWaarde  = analogRead(POT_PIN);
+  gewensteTemp   = (adcWaarde / 3194.0) * 30.0;
+
+  // 3. Ketel logica met hysterese (0.5°C)
+  //    Zet aan als te koud, zet uit als temperatuur bereikt
+  if (gemetenTemp < (gewensteTemp - 0.5)) {
+    ketelAan = true;
+  } else if (gemetenTemp >= gewensteTemp) {
+    ketelAan = false;
+  }
+  digitalWrite(LED_PIN, ketelAan ? HIGH : LOW);
+
+  // 4. Weergave via Serial Monitor
+  Serial.println("──────────────────────────────");
+  Serial.print("Gemeten temp  : ");
+  Serial.print(gemetenTemp, 1);
+  Serial.println(" °C");
+  Serial.print("Gewenste temp : ");
+  Serial.print(gewensteTemp, 1);
+  Serial.println(" °C");
+  Serial.print("Ketel         : ");
+  Serial.println(ketelAan ? "AAN  🔴" : "UIT  ⚫");
+
+  delay(2000); // wacht 2 seconden voor volgende meting
+}
