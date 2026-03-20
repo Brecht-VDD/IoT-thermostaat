@@ -1,0 +1,135 @@
+/*
+  IoT Thermostaat - ESP32-C6 (MET Blynk)
+  Hardware:
+    - DHT11  → GPIO4 (3-pins module, geen externe pull-up nodig)
+    - Potentiometer (10kΩ) → GPIO6 (ADC, wiper)
+    - LED (rood) → GPIO5 via 220Ω weerstand naar GND
+  Blynk:
+    - V0 → gemeten temperatuur (weergave)
+    - V1 → gewenste temperatuur (instelbaar via app)
+    - V2 → ketelstatus aan/uit (weergave)
+*/
+
+#define BLYNK_TEMPLATE_ID   "TMPLxxxxxxxx"   // ← jouw Template ID
+#define BLYNK_TEMPLATE_NAME "Test Temperatuursensor"
+#define BLYNK_AUTH_TOKEN    "7GccLT-2T-3dOI0IGraydq-EK1RzFBkp"  // ← jouw Auth Token
+
+#include <WiFi.h>
+#include <BlynkSimpleEsp32.h>
+#include <DHT.h>
+
+// ─────────────────────────────────────────────
+// WiFi gegevens
+// ─────────────────────────────────────────────
+const char* ssid     = "embed";
+const char* password = "weareincontrol";
+
+// ─────────────────────────────────────────────
+// Pin definities
+// ─────────────────────────────────────────────
+#define DHTPIN   4
+#define DHTTYPE  DHT11
+#define POT_PIN  6
+#define LED_PIN  5
+
+// ─────────────────────────────────────────────
+// Objecten & variabelen
+// ─────────────────────────────────────────────
+DHT dht(DHTPIN, DHTTYPE);
+BlynkTimer timer;
+
+float gemetenTemp  = 0.0;
+float gewensteTemp = 0.0;
+float blynkGewenst = -1.0;  // -1 = nog niet ingesteld via app
+bool  ketelAan     = false;
+
+// ─────────────────────────────────────────────
+// Blynk callback: gewenste temp instellen via app (V1)
+// ─────────────────────────────────────────────
+BLYNK_WRITE(V1) {
+  blynkGewenst = param.asFloat();
+  Serial.print("[App] Gewenste temp ontvangen: ");
+  Serial.print(blynkGewenst, 1);
+  Serial.println(" °C");
+}
+
+// ─────────────────────────────────────────────
+// Hoofd update-functie (elke 2 seconden)
+// ─────────────────────────────────────────────
+void updateThermostaat() {
+
+  // 1. Temperatuur meten
+  float meting = dht.readTemperature();
+  if (isnan(meting)) {
+    Serial.println("[FOUT] DHT11 lezing mislukt! Controleer bedrading.");
+    return;
+  }
+  gemetenTemp = meting;
+
+  // 2. Gewenste temp: app heeft prioriteit boven potmeter
+  if (blynkGewenst >= 0) {
+    gewensteTemp = blynkGewenst;
+  } else {
+    int adcWaarde = analogRead(POT_PIN);
+    gewensteTemp  = (adcWaarde / 3194.0) * 30.0;
+  }
+
+  // 3. Ketel logica met hysterese (0.5 graden)
+  if (gemetenTemp < (gewensteTemp - 0.5)) {
+    ketelAan = true;
+  } else if (gemetenTemp >= gewensteTemp) {
+    ketelAan = false;
+  }
+  digitalWrite(LED_PIN, ketelAan ? HIGH : LOW);
+
+  // 4. Serial Monitor
+  Serial.println("──────────────────────────────");
+  Serial.print("Gemeten temp  : ");
+  Serial.print(gemetenTemp, 1);
+  Serial.println(" °C");
+  Serial.print("Gewenste temp : ");
+  Serial.print(gewensteTemp, 1);
+  if (blynkGewenst >= 0) Serial.print(" °C  (via app)");
+  else Serial.print(" °C  (via potmeter)");
+  Serial.println();
+  Serial.print("Ketel         : ");
+  Serial.println(ketelAan ? "AAN" : "UIT");
+
+  // 5. Blynk updaten
+  Blynk.virtualWrite(V0, gemetenTemp);
+  Blynk.virtualWrite(V1, gewensteTemp);
+  Blynk.virtualWrite(V2, ketelAan ? 1 : 0);
+}
+
+// ─────────────────────────────────────────────
+// Setup
+// ─────────────────────────────────────────────
+void setup() {
+  Serial.begin(115200);
+
+  unsigned long start = millis();
+  while (!Serial && (millis() - start) < 3000) {
+    delay(10);
+  }
+
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  dht.begin();
+
+  Serial.println("=== Thermostaat met Blynk gestart ===");
+  Serial.print("Verbinden met WiFi: ");
+  Serial.println(ssid);
+
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, password);
+  Serial.println("Verbonden!");
+
+  timer.setInterval(2000L, updateThermostaat);
+}
+
+// ─────────────────────────────────────────────
+// Loop
+// ─────────────────────────────────────────────
+void loop() {
+  Blynk.run();
+  timer.run();
+}
